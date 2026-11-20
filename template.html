@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Stock Scanner</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1a1a1a;--mut:#6b6b66;--line:#e4e2dc;--acc:#0b5fff;--ok:#12805c;--warn:#b45309;--bad:#c62828;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#111214;--card:#1b1d20;--ink:#f2f2ef;--mut:#9a9a94;--line:#2b2e32;--acc:#6ea0ff;--ok:#4cc79a;--warn:#f0b35a;--bad:#ff7b7b;color-scheme:dark}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 12px 8px;border-bottom:1px solid var(--line)}
+.row{display:flex;gap:8px}
+input,select,button{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+#q{flex:1;min-width:0;font-size:16px}
+button{cursor:pointer}button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.stats{display:flex;justify-content:space-between;color:var(--mut);font-size:12.5px;margin-top:6px}
+#filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}#filters[hidden]{display:none}
+main{padding:10px 12px 40px;max-width:900px;margin:auto}
+.item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;justify-content:space-between;cursor:pointer}
+.brand{font-weight:700;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase}
+.desc{color:var(--mut);font-size:13px;overflow-wrap:anywhere}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:12px;margin:3px 4px 0 0}
+.pr{text-align:right;white-space:nowrap}.fin{font-weight:700;font-size:17px}.old{text-decoration:line-through;color:var(--mut);font-size:12.5px}
+.off{background:var(--bad);color:#fff;border-radius:6px;padding:0 6px;font-size:12px;font-weight:600}
+.soh{font-weight:600}.in{color:var(--ok)}.low{color:var(--warn)}.out{color:var(--bad)}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600}td.n,th.n{text-align:right}tbody tr{cursor:pointer}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20;display:flex;align-items:flex-end;justify-content:center}.ov[hidden]{display:none}
+.sheet{background:var(--bg);width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+.big{font-size:34px;font-weight:800}.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;margin:12px 0;font-size:14px}.kv b{color:var(--mut);font-weight:500}.kv span{text-align:right;overflow-wrap:anywhere}
+.sz{display:flex;justify-content:space-between;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-top:6px;background:var(--card);cursor:pointer}.sz.cur{border-color:var(--acc)}
+#reader{width:100%;max-width:420px;background:#000;border-radius:14px;overflow:hidden;min-height:200px}
+.empty{text-align:center;color:var(--mut);padding:40px 10px}
+</style></head><body>
+<header>
+ <div class="row"><input id="q" type="search" inputmode="search" placeholder="Scan or type barcode, brand, style, size" autocomplete="off"><button class="pri" id="scanBtn">Scan</button></div>
+ <div class="row" style="margin-top:8px"><button id="fBtn">Filters</button><button id="vBtn">Table view</button><button id="clr">Reset</button></div>
+ <div id="filters" hidden>
+  <select id="fBrand"></select><select id="fCat"></select>
+  <select id="fStock"><option value="">Any stock</option><option value="in">In stock (1+)</option><option value="multi">2 or more</option><option value="out">Zero or negative</option></select>
+  <select id="fDisc"><option value="">Any discount</option><option>25</option><option>35</option><option>45</option></select>
+  <select id="fSort"><option value="">Sort: file order</option><option value="pa">Final price low to high</option><option value="pd">Final price high to low</option><option value="b">Brand A to Z</option><option value="s">Stock high to low</option></select>
+ </div>
+ <div class="stats"><span id="st1"></span><span id="st2"></span></div>
+</header>
+<main id="list"></main>
+<div class="ov" id="det" hidden><div class="sheet" id="sheet"></div></div>
+<div class="ov" id="scan" hidden style="align-items:center;flex-direction:column;gap:12px"><div id="reader"></div><div id="scanErr" style="color:#fff"></div><button id="scanX">Close camera</button></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+const D=__DATA__, SRC="__SRC__";
+const R=D.map(a=>({brand:a[0],cat:a[1],vpn:a[2],color:a[3],size:a[4],desc:a[5],no:a[6],bc:a[7],price:a[8],pct:a[9],fin:a[10],soh:a[11]}));
+const $=id=>document.getElementById(id), z=s=>String(s).replace(/\D/g,'').replace(/^0+/,'');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const f=n=>n.toLocaleString('en-AE',{minimumFractionDigits:n%1?2:0,maximumFractionDigits:2});
+const byCode=new Map(),byVpn=new Map();
+R.forEach(r=>{byCode.set(z(r.bc),r);byCode.set(z(r.no),r);if(!byVpn.has(r.vpn))byVpn.set(r.vpn,[]);byVpn.get(r.vpn).push(r);
+ r.h=[r.brand,r.cat,r.vpn,r.color,r.size,r.desc,r.no,r.bc].join(' ').toLowerCase()});
+let table=false,shown=80,cur=[];
+const fill=(el,all,vals)=>{el.innerHTML=`<option value="">${all}</option>`+vals.map(v=>`<option>${esc(v)}</option>`).join('')};
+fill($('fBrand'),'All brands',[...new Set(R.map(r=>r.brand))].sort());
+fill($('fCat'),'All categories',[...new Set(R.map(r=>r.cat))].sort());
+const sc=r=>r.soh>1?'in':r.soh==1?'low':'out';
+function run(){
+ const t=$('q').value.toLowerCase().split(/\s+/).filter(Boolean),b=$('fBrand').value,c=$('fCat').value,s=$('fStock').value,d=+$('fDisc').value,so=$('fSort').value;
+ cur=R.filter(r=>t.every(w=>r.h.includes(w))&&(!b||r.brand==b)&&(!c||r.cat==c)&&(!d||r.pct==d)&&
+  (!s||(s=='in'&&r.soh>=1)||(s=='multi'&&r.soh>=2)||(s=='out'&&r.soh<=0)));
+ if(so=='pa')cur.sort((x,y)=>x.fin-y.fin);if(so=='pd')cur.sort((x,y)=>y.fin-x.fin);
+ if(so=='b')cur.sort((x,y)=>x.brand.localeCompare(y.brand)||x.desc.localeCompare(y.desc));if(so=='s')cur.sort((x,y)=>y.soh-x.soh);
+ shown=80;draw();
+}
+function draw(){
+ const u=a=>a.reduce((n,r)=>n+Math.max(r.soh,0),0),v=cur.slice(0,shown);
+ $('st1').textContent=`${cur.length.toLocaleString()} of ${R.length.toLocaleString()} items`;
+ $('st2').textContent=`${u(cur).toLocaleString()} units (${SRC})`;
+ if(!cur.length){$('list').innerHTML='<div class="empty">No items found</div>';return}
+ const more=cur.length>shown?`<button style="width:100%;margin-top:8px" id="more">Show more (${cur.length-shown} left)</button>`:'';
+ $('list').innerHTML=(table?`<div class="tw"><table><thead><tr><th>Brand</th><th>Description</th><th>Size</th><th>Barcode</th><th class="n">Orig</th><th class="n">Off</th><th class="n">Final</th><th class="n">SOH</th></tr></thead><tbody>`+
+  v.map(r=>`<tr data-i="${R.indexOf(r)}"><td>${esc(r.brand)}</td><td>${esc(r.desc.slice(0,40))}</td><td>${esc(r.size)}</td><td>${esc(r.bc)}</td><td class="n">${f(r.price)}</td><td class="n">${r.pct}%</td><td class="n"><b>${f(r.fin)}</b></td><td class="n ${sc(r)}">${r.soh}</td></tr>`).join('')+`</tbody></table></div>`
+  :v.map(r=>`<div class="item" data-i="${R.indexOf(r)}"><div><div class="brand">${esc(r.brand)}</div><div class="desc">${esc(r.desc)}</div>
+   <span class="chip">Size ${esc(r.size||'-')}</span><span class="chip">${esc(r.color)}</span><span class="chip">${esc(r.cat)}</span><div class="desc">${esc(r.bc)}</div></div>
+   <div class="pr"><div class="fin">${f(r.fin)}</div><div class="old">${f(r.price)}</div><span class="off">-${r.pct}%</span><div class="soh ${sc(r)}">SOH ${r.soh}</div></div></div>`).join(''))+more;
+ if($('more'))$('more').onclick=()=>{shown+=120;draw()};
+}
+const ord=['XXS','XS','S','M','L','XL','XXL','XXXL'];
+const szCmp=(a,b)=>{const x=parseFloat(a.size),y=parseFloat(b.size);if(!isNaN(x)&&!isNaN(y))return x-y;
+ const i=ord.indexOf(a.size),j=ord.indexOf(b.size);return i>=0&&j>=0?i-j:String(a.size).localeCompare(b.size)};
+function show(r){
+ const sib=[...byVpn.get(r.vpn)].sort(szCmp),tot=sib.reduce((n,x)=>n+Math.max(x.soh,0),0);
+ $('sheet').innerHTML=`<div class="row" style="justify-content:space-between"><div class="brand">${esc(r.brand)}</div><button id="dx">Close</button></div>
+ <div style="margin:4px 0 8px">${esc(r.desc)}</div>
+ <div class="row" style="align-items:flex-end;justify-content:space-between"><div><span class="big">AED ${f(r.fin)}</span><br><span class="old">AED ${f(r.price)}</span> <span class="off">-${r.pct}%</span></div>
+ <div class="pr"><div class="big ${sc(r)}">${r.soh}</div><div class="desc">in stock</div></div></div>
+ <div class="kv"><b>Saving</b><span>AED ${f(r.price-r.fin)}</span><b>Size</b><span>${esc(r.size||'-')}</span><b>Colour</b><span>${esc(r.color||'-')}</span><b>Category</b><span>${esc(r.cat)}</span>
+ <b>Barcode</b><span>${esc(r.bc)}</span><b>Item no.</b><span>${esc(r.no)}</span><b>Style (VPN)</b><span>${esc(r.vpn)}</span></div>
+ <div class="desc"><b>All sizes of this style</b> (${tot} units total)</div>`+
+ sib.map(x=>`<div class="sz ${x===r?'cur':''}" data-bc="${esc(x.bc)}"><span><b>${esc(x.size||'-')}</b> <span class="desc">${esc(x.bc)}</span></span><span class="soh ${sc(x)}">SOH ${x.soh}</span></div>`).join('');
+ $('det').hidden=false;$('sheet').scrollTop=0;$('dx').onclick=()=>$('det').hidden=true;
+}
+function lookup(code){
+ const r=byCode.get(z(code));$('q').value=code;run();
+ if(r)show(r);else if(/^\d{6,}$/.test(code.trim())){$('list').innerHTML=`<div class="empty">Barcode ${esc(code)} not in this file</div>`}
+}
+let sn;
+async function openScan(){
+ $('scan').hidden=false;$('scanErr').textContent='';
+ try{const F=Html5QrcodeSupportedFormats;sn=new Html5Qrcode('reader',{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39],useBarCodeDetectorIfSupported:true,verbose:false});
+  await sn.start({facingMode:'environment'},{fps:10,qrbox:{width:280,height:140}},t=>{navigator.vibrate&&navigator.vibrate(60);closeScan();lookup(t)},()=>{})}
+ catch(e){$('scanErr').textContent='Camera not available: '+e}
+}
+async function closeScan(){$('scan').hidden=true;if(sn){try{await sn.stop();sn.clear()}catch(e){}sn=null}}
+$('scanBtn').onclick=openScan;$('scanX').onclick=closeScan;
+$('q').addEventListener('input',run);
+$('q').addEventListener('keydown',e=>{if(e.key=='Enter'){const r=byCode.get(z($('q').value));if(r){show(r);$('q').select()}}});
+['fBrand','fCat','fStock','fDisc','fSort'].forEach(i=>$(i).onchange=run);
+$('fBtn').onclick=()=>$('filters').hidden=!$('filters').hidden;
+$('vBtn').onclick=()=>{table=!table;$('vBtn').textContent=table?'Card view':'Table view';draw()};
+$('clr').onclick=()=>{$('q').value='';['fBrand','fCat','fStock','fDisc','fSort'].forEach(i=>$(i).value='');run();$('q').focus()};
+$('list').onclick=e=>{const el=e.target.closest('[data-i]');if(el)show(R[+el.dataset.i])};
+$('sheet').onclick=e=>{const el=e.target.closest('[data-bc]');if(el)show(byCode.get(z(el.dataset.bc)))};
+$('det').onclick=e=>{if(e.target==$('det'))$('det').hidden=true};
+run();
+</script></body></html>
