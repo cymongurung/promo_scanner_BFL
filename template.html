@@ -30,7 +30,7 @@ th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600
 .big{font-size:34px;font-weight:800}.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;margin:12px 0;font-size:14px}.kv b{color:var(--mut);font-weight:500}.kv span{text-align:right;overflow-wrap:anywhere}
 .sz{display:flex;justify-content:space-between;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-top:6px;background:var(--card);cursor:pointer}.sz.cur{border-color:var(--acc)}
 #reader{width:100%;max-width:420px;background:#000;border-radius:14px;overflow:hidden;min-height:200px}
-.empty{text-align:center;color:var(--mut);padding:40px 10px}
+#det{z-index:30}.empty{text-align:center;color:var(--mut);padding:40px 10px}
 </style></head><body>
 <header>
  <div class="row"><input id="q" type="search" inputmode="search" placeholder="Scan or type barcode, brand, style, size" autocomplete="off"><button class="pri" id="scanBtn">Scan</button></div>
@@ -44,8 +44,11 @@ th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600
  <div class="stats"><span id="st1"></span><span id="st2"></span></div>
 </header>
 <main id="list"></main>
-<div class="ov" id="det" hidden><div class="sheet" id="sheet"></div></div>
-<div class="ov" id="scan" hidden style="align-items:center;flex-direction:column;gap:12px"><div id="reader"></div><div id="scanErr" style="color:#fff"></div><button id="scanX">Close camera</button></div>
+<div id="toast" hidden style="position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:#222;color:#fff;border-radius:12px;padding:12px;text-align:center"></div><div class="ov" id="det" hidden><div class="sheet" id="sheet"></div></div>
+<div class="ov" id="scan" hidden style="align-items:center;flex-direction:column;gap:10px;padding:10px">
+ <div id="reader" style="width:100%;max-width:520px;background:#000;border-radius:14px;overflow:hidden;min-height:220px"></div>
+ <div id="zoomStatus" style="color:#fff;font-size:13px"></div>
+ <button id="scanX">Close Scanner</button></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <script>
 const D=__DATA__, SRC="__SRC__";
@@ -101,15 +104,47 @@ function lookup(code){
  const r=byCode.get(z(code));$('q').value=code;run();
  if(r)show(r);else if(/^\d{6,}$/.test(code.trim())){$('list').innerHTML=`<div class="empty">Barcode ${esc(code)} not in this file</div>`}
 }
-let sn;
-async function openScan(){
- $('scan').hidden=false;$('scanErr').textContent='';
- try{const F=Html5QrcodeSupportedFormats;sn=new Html5Qrcode('reader',{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39],useBarCodeDetectorIfSupported:true,verbose:false});
-  await sn.start({facingMode:'environment'},{fps:10,qrbox:{width:280,height:140}},t=>{navigator.vibrate&&navigator.vibrate(60);closeScan();lookup(t)},()=>{})}
- catch(e){$('scanErr').textContent='Camera not available: '+e}
+let scanner=null,scannerRunning=false;
+const SUPPORTED_FORMATS=["EAN_13","EAN_8","UPC_A","UPC_E","CODE_128","CODE_39"];
+function toast(m){const e=$('toast');e.textContent=m;e.hidden=false;clearTimeout(window.__t);window.__t=setTimeout(()=>e.hidden=true,3000)}
+function updateZoomLabel(x){$('zoomStatus').textContent=x}
+function setScannerZoom(){
+ const video=document.querySelector("#reader video");
+ if(!video||!video.srcObject)return;
+ const tracks=video.srcObject.getVideoTracks();if(!tracks.length)return;
+ const track=tracks[0];
+ const capabilities=track.getCapabilities?track.getCapabilities():{};
+ if(Array.isArray(capabilities.focusMode)&&capabilities.focusMode.includes("continuous")){track.applyConstraints({advanced:[{focusMode:"continuous"}]}).catch(()=>{})}
+ if(!capabilities.zoom){updateZoomLabel("Zoom: not supported by this camera/browser");return}
+ const min=Number(capabilities.zoom.min??1),max=Number(capabilities.zoom.max??min),step=Number(capabilities.zoom.step??0.1);
+ let target=max>=2?2:max;target=Math.max(min,Math.min(max,target));
+ if(step>0){target=min+Math.round((target-min)/step)*step;target=Math.max(min,Math.min(max,target))}
+ track.applyConstraints({advanced:[{zoom:target}]}).then(()=>updateZoomLabel(`Zoom: ${Number(target).toFixed(target%1?1:0)}x`)).catch(()=>updateZoomLabel("Zoom: camera default"));
 }
-async function closeScan(){$('scan').hidden=true;if(sn){try{await sn.stop();sn.clear()}catch(e){}sn=null}}
-$('scanBtn').onclick=openScan;$('scanX').onclick=closeScan;
+function openCamera(){
+ if(scannerRunning)return;
+ $('scan').hidden=false;updateZoomLabel("Opening camera... Default zoom: 2x");
+ if(typeof Html5Qrcode==="undefined"){$('scan').hidden=true;toast("Scanner library could not load. Check internet and refresh the page.");return}
+ scanner=new Html5Qrcode("reader",{verbose:false,experimentalFeatures:{useBarCodeDetectorIfSupported:true}});
+ scanner.start(
+  {facingMode:"environment"},
+  {fps:15,
+   qrbox:(w,h)=>({width:Math.floor(Math.min(w*0.9,420)),height:Math.floor(Math.min(h*0.5,180))}),
+   videoConstraints:{facingMode:"environment",width:{ideal:1920},height:{ideal:1080}}},
+  (code,result)=>{
+   const fmt=result?.result?.format?.formatName;
+   if(fmt&&!SUPPORTED_FORMATS.includes(fmt))return;
+   stopCamera();navigator.vibrate&&navigator.vibrate(60);lookup(code);
+  },
+  ()=>{}
+ ).then(()=>{scannerRunning=true;setScannerZoom();setTimeout(setScannerZoom,250);setTimeout(setScannerZoom,800)})
+ .catch(err=>{$('scan').hidden=true;toast("Camera could not be opened. Check browser camera permission.");console.error(err)});
+}
+function stopCamera(){
+ if(scanner&&scannerRunning){scanner.stop().catch(()=>{}).finally(()=>{scannerRunning=false})}
+ $('scan').hidden=true;
+}
+$('scanBtn').onclick=openCamera;$('scanX').onclick=stopCamera;
 $('q').addEventListener('input',run);
 $('q').addEventListener('keydown',e=>{if(e.key=='Enter'){const r=byCode.get(z($('q').value));if(r){show(r);$('q').select()}}});
 ['fBrand','fCat','fStock','fDisc','fSort'].forEach(i=>$(i).onchange=run);
